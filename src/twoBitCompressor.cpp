@@ -1,5 +1,4 @@
 #include "twoBitCompressor.hpp"
-
 /**
  * Compresses a DNA sequence (consisting of As, Cs, Gs and Ts) to a 2-bit
  * representation using the following encoding:
@@ -17,13 +16,20 @@
  */
 void twoBitCompress(char* seq, size_t seqLen, uint32_t* compressedSeq) {
     size_t compressedSeqLen = (seqLen+15)/16;
-
+/*
     for (size_t i=0; i < compressedSeqLen; i++) {
         compressedSeq[i] = 0;
 
         size_t start = 16*i;
         size_t end = std::min(seqLen, start+16);
 
+        compressSubSeq(seq, start, end, compressedSeq, i);
+    }
+*/
+    tbb::parallel_for((size_t)0, compressedSeqLen, [=](size_t i){
+        compressedSeq[i] = 0;
+        size_t start = 16*i;
+        size_t end = std::min(seqLen, start+16);
         uint32_t twoBitVal = 0;
         uint32_t shift = 0;
         for (auto j=start; j<end; j++) {
@@ -44,10 +50,8 @@ void twoBitCompress(char* seq, size_t seqLen, uint32_t* compressedSeq) {
                 twoBitVal = 0;
                 break;
             }
-
             compressedSeq[i] |= (twoBitVal << shift);
             shift += 2;
         }
-    }
+    });  
 }
-
