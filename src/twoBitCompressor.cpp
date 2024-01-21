@@ -14,19 +14,21 @@
  *
  * HINT: use tbb::parallel_for using a new lambda function
  */
+
+ // Each iteration of the outer loop that compresses 16 characters together is independent of each other.
+ // Parallelize these iterations using parallel_for loop.
+ // Leave the inner loop unchanged since the parallelization overheads would overshadow any gains through parallelization
+ // since each iteration takes <<1us.
+
+// Attempted to convert inner loop into a separate function for readability, but it resulted in a noticeable slowdown, hence
+// avoided that.
+
+ // Attempted to manually control grainsize using blocked_range and simple_partitioner, but it did not give any speedup
+ // with different grainsizes.
+
 void twoBitCompress(char* seq, size_t seqLen, uint32_t* compressedSeq) {
     size_t compressedSeqLen = (seqLen+15)/16;
-/*
-    for (size_t i=0; i < compressedSeqLen; i++) {
-        compressedSeq[i] = 0;
-
-        size_t start = 16*i;
-        size_t end = std::min(seqLen, start+16);
-
-        compressSubSeq(seq, start, end, compressedSeq, i);
-    }
-*/
-    tbb::parallel_for((size_t)0, compressedSeqLen, [=](size_t i){
+    tbb::parallel_for((size_t)0, compressedSeqLen, [=](size_t i){   //Parallelize outer loop 
         compressedSeq[i] = 0;
         size_t start = 16*i;
         size_t end = std::min(seqLen, start+16);
