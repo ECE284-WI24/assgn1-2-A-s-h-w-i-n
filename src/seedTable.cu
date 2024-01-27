@@ -111,36 +111,31 @@ __global__ void kmerPosConcat(
     int bx = blockIdx.x;
 
     // HINT: Values below could be useful for parallelizing the code
-    //int bs = blockDim.x;
-    //int gs = gridDim.x;
-
-    uint32_t N = d_seqLen;
-    uint32_t k = kmerSize;
+    int bs = blockDim.x;
 
     // Helps mask the non kmer bits from compressed sequence. E.g. for k=2,
     // mask=0x1111 and for k=3, mask=0x111111
-    uint32_t mask = (1 << 2*k)-1;
+    uint32_t mask = (1 << 2*kmerSize)-1;
     size_t kmer = 0;
 
     // HINT: the if statement below ensures only the first thread of the first
     // block does all the computation. This statement might have to be removed
-    // during parallelization
-    if ((bx == 0) && (tx == 0)) {
-        for (uint32_t i = 0; i <= N-k; i++) {
-            uint32_t index = i/16;
-            uint32_t shift1 = 2*(i%16);
-            if (shift1 > 0) {
-                uint32_t shift2 = 32-shift1;
-                kmer = ((d_compressedSeq[index] >> shift1) | (d_compressedSeq[index+1] << shift2)) & mask;
-            } else {
-                kmer = d_compressedSeq[index] & mask;
-            }
-
-            // Concatenate kmer value (first 32-bits) with its position (last
-            // 32-bits)
-            size_t kPosConcat = (kmer << 32) + i;
-            d_kmerPos[i] = kPosConcat;
+    // during parallelization    
+    uint32_t i = bs*bx + tx;
+    if (i <= d_seqLen-kmerSize) {
+        uint32_t index = i/16;
+        uint32_t shift1 = 2*(i%16);
+        if (shift1 > 0) {
+            uint32_t shift2 = 32-shift1;
+            kmer = ((d_compressedSeq[index] >> shift1) | (d_compressedSeq[index+1] << shift2)) & mask;
+        } else {
+            kmer = d_compressedSeq[index] & mask;
         }
+
+        // Concatenate kmer value (first 32-bits) with its position (last
+        // 32-bits)
+        size_t kPosConcat = (kmer << 32) + i;
+        d_kmerPos[i] = kPosConcat;
     }
 }
 
@@ -238,9 +233,9 @@ void GpuSeedTable::seedTableOnGpu (
     size_t* kmerPos) {
 
     // ASSIGNMENT 2 TASK: make sure to appropriately set the values below
-    int numBlocks = 1; // i.e. number of thread blocks on the GPU
-    int blockSize = 1; // i.e. number of GPU threads per thread block
-
+    int blockSize = 16; // i.e. number of GPU threads per thread block
+    int numBlocks = (seqLen-kmerSize)/blockSize + 1; // i.e. number of thread blocks on the GPU
+    printf("GpuSeedTable: numBlocks: %d, blockSize: %d, totalThreads: %d, Required iter: %d\n", numBlocks, blockSize, numBlocks*blockSize, seqLen-kmerSize);
     kmerPosConcat<<<numBlocks, blockSize>>>(compressedSeq, seqLen, kmerSize, kmerPos);
 
     // Parallel sort the kmerPos array on the GPU device using the thrust
@@ -284,4 +279,3 @@ void GpuSeedTable::DeviceArrays::printValues(int numValues) {
         printf("%i\t%u\t%zu\n", i, kmerOffset[i], kmerPos[i]);
     }
 }
-
