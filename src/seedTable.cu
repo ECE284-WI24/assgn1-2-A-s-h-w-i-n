@@ -224,17 +224,16 @@ __global__ void kmerPosMask(
     int bx = blockIdx.x;
 
     // HINT: Values below could be useful for parallelizing the code
-    //int bs = blockDim.x;
-    //int gs = gridDim.x;
+    int bs = blockDim.x;
+    int gs = gridDim.x;
 
     uint32_t N = d_seqLen;
     uint32_t k = kmerSize;
 
     size_t mask = ((size_t) 1 << 32)-1;
-    if ((bx == 0) && (tx == 0)) {
-        for (uint32_t i = 0; i <= N-k; i++) {
-            d_kmerPos[i] = d_kmerPos[i] & mask;
-        }
+    uint32_t i = bs*bx + tx;
+    if (i <= d_seqLen-kmerSize) {
+        d_kmerPos[i] = d_kmerPos[i] & mask;
     }
 }
 
