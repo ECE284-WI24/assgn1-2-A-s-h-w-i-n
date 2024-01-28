@@ -67,6 +67,7 @@ void GpuSeedTable::DeviceArrays::allocateDeviceArrays (uint32_t* compressedSeq, 
 
     // Allocate memory on GPU device for storing the kmer offset array
     err = cudaMalloc(&d_kmerOffset, maxKmers*sizeof(uint32_t));
+    printf("maxKmers: %d\n", maxKmers);
     if (err != cudaSuccess) {
         fprintf(stderr, "GPU_ERROR: cudaMalloc failed!\n");
         exit(1);
@@ -157,8 +158,8 @@ __global__ void kmerOffsetFill(
     int tx = threadIdx.x;
     int bx = blockIdx.x;
     // HINT: Values below could be useful for parallelizing the code
-    //int bs = blockDim.x;
-    //int gs = gridDim.x;
+    int bs = blockDim.x;
+    int gs = gridDim.x;
 
     uint32_t N = d_seqLen;
     uint32_t k = kmerSize;
@@ -166,29 +167,47 @@ __global__ void kmerOffsetFill(
     size_t mask = ((size_t) 1 << 32)-1;
     uint32_t kmer = 0;
     uint32_t lastKmer = 0;
-
+    uint32_t nextKmer = 0;
     // HINT: the if statement below ensures only the first thread of the first
     // block does all the computation. This statement might have to be removed
     // during parallelization
-    if ((bx == 0) && (tx == 0)) {
-        for (uint32_t i = 0; i <= N-k; i++) {
+        uint32_t i = bs*bx + tx;
+        
+        if (i <= N-k) {
             kmer = (d_kmerPos[i] >> 32) & mask;
-            if (kmer != lastKmer) {
-                for (auto j=lastKmer; j<kmer; j++) {
-                    d_kmerOffset[j] = i;
-                }
+            nextKmer = (d_kmerPos[i+1] >> 32) & mask;
+            if (kmer != nextKmer) {
+                //printf("kmer: %d\ti = %d", kmer, i);
+                d_kmerOffset[kmer] = i+1;
             }
-            lastKmer = kmer;
+        }
+        else {
+            kmer = (d_kmerPos[N-k] >> 32) & mask;
+            if (d_kmerOffset[kmer] != 0) {
+                d_kmerOffset[kmer] = N-k;
+            }
         }
 
+        __syncthreads();
+
+        if (i == bs*bx) {
+            kmer = (d_kmerPos[i] >> 32) & mask;
+            nextKmer = (d_kmerPos[i+bs-1] >> 32) & mask;
+            //printf("kmer: %d\tnextkmer: %d\n", kmer, nextKmer);
+            for (auto j = kmer; j < nextKmer; j++) {
+                if (d_kmerOffset[j+1] == 0 && i != 0){
+                    d_kmerOffset[j+1] = d_kmerOffset[j];
+                }
+            }
+        }
         // For all kmers lexicographically larger than the lexicographically
         // largest kmer in the sequence, set offset to N-k
         // HINT: This loop can also be parallelized (e.g. using thread block
         // that encounters position N-k)
-        for (auto j=lastKmer; j<numKmers; j++) {
-            d_kmerOffset[j] = N-k;
-        }
-    }
+        
+        // for (auto j=lastKmer; j<numKmers; j++) {
+        //     d_kmerOffset[j] = N-k;
+        // }
 }
 
 /**
@@ -235,7 +254,6 @@ void GpuSeedTable::seedTableOnGpu (
     // ASSIGNMENT 2 TASK: make sure to appropriately set the values below
     int blockSize = 16; // i.e. number of GPU threads per thread block
     int numBlocks = (seqLen-kmerSize)/blockSize + 1; // i.e. number of thread blocks on the GPU
-    printf("GpuSeedTable: numBlocks: %d, blockSize: %d, totalThreads: %d, Required iter: %d\n", numBlocks, blockSize, numBlocks*blockSize, seqLen-kmerSize);
     kmerPosConcat<<<numBlocks, blockSize>>>(compressedSeq, seqLen, kmerSize, kmerPos);
 
     // Parallel sort the kmerPos array on the GPU device using the thrust
@@ -276,6 +294,10 @@ void GpuSeedTable::DeviceArrays::printValues(int numValues) {
 
     printf("i\tkmerOffset[i]\tkmerPos[i]\n");
     for (int i=0; i<numValues; i++) {
+        size_t s = 4294967295;
+        size_t x = kmerPos[i]&s;
+        // printf("%i\t%zu\t%zu\t%zu\n", i, kmerPos[i], kmerPos[i]>>32, x);
+        //printf("%i\t%u\t%zu\n", i, kmerOffset[i], x);
         printf("%i\t%u\t%zu\n", i, kmerOffset[i], kmerPos[i]);
     }
 }
