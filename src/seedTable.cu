@@ -49,7 +49,7 @@ void GpuSeedTable::DeviceArrays::allocateDeviceArrays (uint32_t* compressedSeq, 
     uint32_t compressedSeqLen = (seqLen+15)/16;
     uint32_t maxKmers = (uint32_t) pow(4,kmerSize)+1;
 
-    // Only (1)allocate and (2)transfer the 2-bit compressed sequence to GPU.
+    // Only (1) allocate and (2)transfer the 2-bit compressed sequence to GPU.
     // This reduces the memory transfer and storage overheads
     // 1. Allocate memory
     err = cudaMalloc(&d_compressedSeq, compressedSeqLen*sizeof(uint32_t));
@@ -110,8 +110,6 @@ __global__ void kmerPosConcat(
 
     int tx = threadIdx.x;
     int bx = blockIdx.x;
-
-    // HINT: Values below could be useful for parallelizing the code
     int bs = blockDim.x;
     int gs = gridDim.x;
 
@@ -119,17 +117,12 @@ __global__ void kmerPosConcat(
     // mask=0x1111 and for k=3, mask=0x111111
     uint32_t mask = (1 << 2*kmerSize)-1;
     size_t kmer = 0;
-
     uint32_t N = d_seqLen;
     uint32_t k = kmerSize;
-
-    // HINT: the if statement below ensures only the first thread of the first
-    // block does all the computation. This statement might have to be removed
-    // during parallelization  
     uint32_t iterCount = (N-k+2)/(gs*bs);
     uint32_t currThread = bs*bx + tx;  
-    uint32_t i = bs*bx + tx;
     uint32_t loopTerm;
+
     if (currThread == gs*bs-1) {
         loopTerm = N-k+1;
     }
@@ -147,30 +140,11 @@ __global__ void kmerPosConcat(
                 kmer = d_compressedSeq[index] & mask;
             }
 
-            // Concatenate kmer value (first 32-bits) with its position (last
-            // 32-bits)
+            // Concatenate kmer value (first 32-bits) with its position (last 32-bits)
             size_t kPosConcat = (kmer << 32) + i;
             d_kmerPos[i] = kPosConcat;
         }
     }
-
-    // if ((bx == 0) && (tx == 0)) {
-    //     for (uint32_t i = 0; i <= N-k; i++) {
-    //         uint32_t index = i/16;
-    //         uint32_t shift1 = 2*(i%16);
-    //         if (shift1 > 0) {
-    //             uint32_t shift2 = 32-shift1;
-    //             kmer = ((d_compressedSeq[index] >> shift1) | (d_compressedSeq[index+1] << shift2)) & mask;
-    //         } else {
-    //             kmer = d_compressedSeq[index] & mask;
-    //         }
-
-    //         // Concatenate kmer value (first 32-bits) with its position (last
-    //         // 32-bits)
-    //         size_t kPosConcat = (kmer << 32) + i;
-    //         d_kmerPos[i] = kPosConcat;
-    //     }
-    // }
 }
 
 /**
@@ -190,7 +164,6 @@ __global__ void kmerOffsetFill(
 
     int tx = threadIdx.x;
     int bx = blockIdx.x;
-    // HINT: Values below could be useful for parallelizing the code
     int bs = blockDim.x;
     int gs = gridDim.x;
 
@@ -199,12 +172,7 @@ __global__ void kmerOffsetFill(
 
     size_t mask = ((size_t) 1 << 32)-1;
     uint32_t kmer = 0;
-    uint32_t lastKmer = 0;
     uint32_t nextKmer = 0;
-    // HINT: the if statement below ensures only the first thread of the first
-    // block does all the computation. This statement might have to be removed
-    // during parallelization
-    uint32_t i = bs*bx + tx;
     uint32_t iterCount = (N-k+2)/(gs*bs);
     uint32_t currThread = bs*bx + tx;
     uint32_t loopTerm;
@@ -215,13 +183,11 @@ __global__ void kmerOffsetFill(
     else {
         loopTerm = (currThread+1)*(iterCount);
     }
-    //printf("IterCount: %d [%f]\tcurrThread: %d\tloopTerm: %d\n", iterCount, (float)(N-k+2)/(float)(gs*bs), currThread, loopTerm);
     for (uint32_t i = currThread*iterCount; i < loopTerm; i++) {
         if (i <= N-k) {
             kmer = (d_kmerPos[i] >> 32) & mask;
             nextKmer = (d_kmerPos[i+1] >> 32) & mask;
             if (kmer != nextKmer) {
-                //printf("kmer: %d\ti = %d\n", kmer, i);
                 if (i == N-k)
                     d_kmerOffset[kmer] = i;
                 else
@@ -238,39 +204,15 @@ __global__ void kmerOffsetFill(
 
     __syncthreads();
 
-    if (i == bs*bx) {
-        kmer = (d_kmerPos[i*iterCount] >> 32) & mask;
-        nextKmer = (d_kmerPos[(i+bs)*iterCount-1] >> 32) & mask;
-        //printf("kmer: %d\tindex: %d\tnextKmer: %d\tindex: %d\n", kmer, i*iterCount, nextKmer, (i+bs)*iterCount-1);
-        //printf("kmer: %d\tnextkmer: %d\n", kmer, nextKmer);
+    if (currThread == bs*bx) {
+        kmer = (d_kmerPos[currThread*iterCount] >> 32) & mask;
+        nextKmer = (d_kmerPos[(currThread+bs)*iterCount-1] >> 32) & mask;
         for (auto j = kmer; j < nextKmer; j++) {    
-            //printf("offset[%d+1] = %d\n", j, d_kmerOffset[j+1]);
             if (d_kmerOffset[j+1] == 0) {            
                 d_kmerOffset[j+1] = d_kmerOffset[j];
             }
         }
     }
-
-    // if ((bx == 0) && (tx == 0)) {
-    //     for (uint32_t i = 0; i <= N-k; i++) {
-    //         kmer = (d_kmerPos[i] >> 32) & mask;
-    //         if (kmer != lastKmer) {
-    //             for (auto j=lastKmer; j<kmer; j++) {
-    //                 d_kmerOffset[j] = i;
-    //             }
-    //         }
-    //         lastKmer = kmer;
-    //     }
-
-    //     // For all kmers lexicographically larger than the lexicographically
-    //     // largest kmer in the sequence, set offset to N-k
-    //     // HINT: This loop can also be parallelized (e.g. using thread block
-    //     // that encounters position N-k)
-    //     for (auto j=lastKmer; j<numKmers; j++) {
-    //         d_kmerOffset[j] = N-k;
-    //     }
-    // }
-
 }
 
 /**
@@ -285,8 +227,6 @@ __global__ void kmerPosMask(
 
     int tx = threadIdx.x;
     int bx = blockIdx.x;
-
-    // HINT: Values below could be useful for parallelizing the code
     int bs = blockDim.x;
     int gs = gridDim.x;
 
@@ -296,7 +236,6 @@ __global__ void kmerPosMask(
     size_t mask = ((size_t) 1 << 32)-1;
     uint32_t iterCount = (N-k+2)/(gs*bs);
     uint32_t currThread = bs*bx + tx;
-    //printf("IterCount: %d [%f]\tcurrThread: %d\n", iterCount, (float)(N-k+2)/(float)(gs*bs), currThread);
     uint32_t loopTerm;
     if (currThread == gs*bs-1) {
         loopTerm = N-k+1;
@@ -309,12 +248,6 @@ __global__ void kmerPosMask(
             d_kmerPos[i] = d_kmerPos[i] & mask;
         }
     }
-
-    // if ((bx == 0) && (tx == 0)) {
-    //     for (uint32_t i = 0; i <= N-k; i++) {
-    //         d_kmerPos[i] = d_kmerPos[i] & mask;
-    //     }
-    // }
 }
 
 /**
@@ -372,11 +305,7 @@ void GpuSeedTable::DeviceArrays::printValues(int numValues) {
     }
 
     printf("i\tkmerOffset[i]\tkmerPos[i]\n");
-    for (uint32_t i=0; i<numValues; i++) {
-        //size_t s = 4294967295;
-        //size_t x = kmerPos[i]&s;
-        //printf("%i\t%zu\t%zu\t%zu\n", i, kmerPos[i], kmerPos[i]>>32, x);
-        //printf("%i\t%u\t%zu\n", i, kmerOffset[i], x);
+    for (int i=0; i<numValues; i++) {
         printf("%i\t%u\t%zu\n", i, kmerOffset[i], kmerPos[i]);
     }
 }
