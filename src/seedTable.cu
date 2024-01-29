@@ -119,8 +119,8 @@ __global__ void kmerPosConcat(
     size_t kmer = 0;
     uint32_t N = d_seqLen;
     uint32_t k = kmerSize;
-    uint32_t iterCount = (N-k+2)/(gs*bs);
-    uint32_t currThread = bs*bx + tx;  
+    uint32_t iterCount = (N-k+2)/(gs*bs);                  // loop iterations per thread
+    uint32_t currThread = bs*bx + tx;                      // loop iteration corresponding to the thread
     uint32_t loopTerm;
 
     if (currThread == gs*bs-1) {
@@ -129,9 +129,9 @@ __global__ void kmerPosConcat(
     else {
         loopTerm = (currThread+1)*(iterCount);
     }
-    for (uint32_t i = currThread*iterCount; i < loopTerm; i++) {
-        if (i <= N-k) {
-            uint32_t index = i/16;
+    for (uint32_t i = currThread*iterCount; i < loopTerm; i++) {        // process a certain number of iterations in a thread so that
+        if (i <= N-k) {                                                 // all elements are processed using the available number of
+            uint32_t index = i/16;                                      // threads
             uint32_t shift1 = 2*(i%16);
             if (shift1 > 0) {
                 uint32_t shift2 = 32-shift1;
@@ -173,8 +173,8 @@ __global__ void kmerOffsetFill(
     size_t mask = ((size_t) 1 << 32)-1;
     uint32_t kmer = 0;
     uint32_t nextKmer = 0;
-    uint32_t iterCount = (N-k+2)/(gs*bs);
-    uint32_t currThread = bs*bx + tx;
+    uint32_t iterCount = (N-k+2)/(gs*bs);                  // loop iterations per thread
+    uint32_t currThread = bs*bx + tx;                      // loop iteration corresponding to the thread
     uint32_t loopTerm;
     
     if (currThread == gs*bs-1) {
@@ -183,27 +183,31 @@ __global__ void kmerOffsetFill(
     else {
         loopTerm = (currThread+1)*(iterCount);
     }
-    for (uint32_t i = currThread*iterCount; i < loopTerm; i++) {
-        if (i <= N-k) {
+    for (uint32_t i = currThread*iterCount; i < loopTerm; i++) {    // find all places in the sorted position
+        if (i <= N-k) {                                             // table where the kmer changes
             kmer = (d_kmerPos[i] >> 32) & mask;
             nextKmer = (d_kmerPos[i+1] >> 32) & mask;
             if (kmer != nextKmer) {
                 if (i == N-k)
-                    d_kmerOffset[kmer] = i;
+                    d_kmerOffset[kmer] = i;                         // update the respective kmer offset
                 else
                     d_kmerOffset[kmer] = i+1;
             }
         }
+        // for all kmers lexicographically larger than the lexicographically
+        // largest kmer in the sequence, set offset to N-k
         else {
-            kmer = (d_kmerPos[N-k] >> 32) & mask;
+            kmer = (d_kmerPos[N-k] >> 32) & mask;                   
             if (d_kmerOffset[kmer] != 0) {
                 d_kmerOffset[kmer] = N-k;
             }
         }
     }
-
+    // wait for all threads in a block to finish updating the offset table. This is necessary to avoid
+    // read after write hazard.
     __syncthreads();
-
+    // for all the kmers that are not found
+    // replace the initialized 0 with the index of the next 
     if (currThread == bs*bx) {
         kmer = (d_kmerPos[currThread*iterCount] >> 32) & mask;
         nextKmer = (d_kmerPos[(currThread+bs)*iterCount-1] >> 32) & mask;
@@ -234,8 +238,8 @@ __global__ void kmerPosMask(
     uint32_t k = kmerSize;
 
     size_t mask = ((size_t) 1 << 32)-1;
-    uint32_t iterCount = (N-k+2)/(gs*bs);
-    uint32_t currThread = bs*bx + tx;
+    uint32_t iterCount = (N-k+2)/(gs*bs);                  // loop iterations per thread
+    uint32_t currThread = bs*bx + tx;                      // loop iteration corresponding to the thread
     uint32_t loopTerm;
     if (currThread == gs*bs-1) {
         loopTerm = N-k+1;
@@ -243,9 +247,9 @@ __global__ void kmerPosMask(
     else {
         loopTerm = (currThread+1)*(iterCount);
     }
-    for (uint32_t i = currThread*iterCount; i < loopTerm; i++) {
-        if (i <= N-k) {
-            d_kmerPos[i] = d_kmerPos[i] & mask;
+    for (uint32_t i = currThread*iterCount; i < loopTerm; i++) {    // process a certain number of iterations in a thread so that
+if (i <= N-k) {                                                     // all elements are processed using the available number of
+            d_kmerPos[i] = d_kmerPos[i] & mask;                     // threads
         }
     }
 }
@@ -264,8 +268,8 @@ void GpuSeedTable::seedTableOnGpu (
     size_t* kmerPos) {
 
     // ASSIGNMENT 2 TASK: make sure to appropriately set the values below
-    int blockSize = 512; // i.e. number of GPU threads per thread block
-    int numBlocks = 1024; //(seqLen-kmerSize)/blockSize + 1; // i.e. number of thread blocks on the GPU
+    int blockSize = 32;   // i.e. number of GPU threads per thread block
+    int numBlocks = 256;  // i.e. number of thread blocks on the GPU
     kmerPosConcat<<<numBlocks, blockSize>>>(compressedSeq, seqLen, kmerSize, kmerPos);
 
     // Parallel sort the kmerPos array on the GPU device using the thrust
